@@ -29,12 +29,6 @@ public class Process implements Comparable<Process> {
         PRIORITY    // For Priority Scheduling
     }
 
-    /**
-     * The static comparator used by PriorityBlockingQueue.
-     * Its behavior is set by setSortStrategy().
-     */
-    public static Comparator<Process> sortComparator = Comparator.comparingInt(p -> p.burstTime);
-
     // === Fields from README ===
     public final String name;
     public final int burstTime;
