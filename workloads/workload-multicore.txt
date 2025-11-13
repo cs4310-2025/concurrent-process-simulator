@@ -1,0 +1,9 @@
+# Name,ArrivalTimeMs,BurstTimeMs,Priority
+P1,0,200,1
+P2,0,200,1
+P3,0,200,1
+P4,0,200,1
+P5,0,200,1
+P6,0,200,1
+P7,0,200,1
+P8,0,200,1
