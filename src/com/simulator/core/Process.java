@@ -1,3 +1,5 @@
+package com.simulator.core;
+
 /**
  * A stubbed data object for M1. It only contains the burstTime,
  * which is the minimum data needed for the smoke test.

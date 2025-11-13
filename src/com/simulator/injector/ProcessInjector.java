@@ -1,24 +1,45 @@
+package com.simulator.injector;
+
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 
+
 /**
  * A separate "spawner" process that injects new processes
  * into the running simulator via IPC.
- * This minimal version hardcodes pipe IPC and a workload file path.
  */
 public class ProcessInjector {
 
-    // Hardcoded settings for the initial implementation
-    private final String ipcType = "pipe";
-    private final String workloadPath = "workload.txt";
+    private final String workloadPath;
+
+    public ProcessInjector(String workloadPath) {
+        this.workloadPath = workloadPath;
+    }
 
     public static void main(String[] args) {
-        // We will parse args in a later milestone
-        ProcessInjector injector = new ProcessInjector();
+        // Argument parsing
+        String workloadPath = null;
+        String ipcType = "pipe"; // Default to pipe for now
+
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--workload") && i + 1 < args.length) {
+                workloadPath = args[i + 1];
+                i++; // Skip next arg
+            }
+            // We will add --ipc parsing in a later milestone
+        }
+
+        if (workloadPath == null) {
+            System.err.println("[Injector] ERROR: Missing required argument: --workload <FILE>");
+            System.exit(1);
+        }
+
+        // Injection
+
+        ProcessInjector injector = new ProcessInjector(workloadPath);
         
-        // Log to stderr to avoid polluting the stdout pipe
-        System.err.println("[Injector] Starting injection with IPC: " + injector.ipcType + 
+        System.err.println("[Injector] Starting injection with IPC: " + ipcType + 
                            ", Workload: " + injector.workloadPath);
         
         injector.runInjection();
@@ -34,6 +55,7 @@ public class ProcessInjector {
         long injectionStartTime = System.currentTimeMillis();
         long lastArrivalTime = 0;
 
+        // Use the workloadPath field
         try (BufferedReader reader = new BufferedReader(new FileReader(this.workloadPath))) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -61,7 +83,7 @@ public class ProcessInjector {
                 lastArrivalTime = currentArrivalTime;
             }
         } catch (IOException e) {
-            System.err.println("[Injector] ERROR: Could not read workload file: " + e.getMessage());
+            System.err.println("[Injector] ERROR: Could not read workload file '" + this.workloadPath + "': " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             System.err.println("[Injector] ERROR: Injection sleep interrupted.");
