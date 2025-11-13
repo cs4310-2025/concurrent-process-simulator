@@ -1,16 +1,22 @@
-# Temporary File
-
-The build system is very messy right now.
-
-## Build
+# Building
 
 ```bash
-# Yes, organization is poop right now.
-cd ./src
+# 1. Compile all Java files
+javac -d build/classes \
+    src/com/simulator/core/*.java \
+    src/com/simulator/injector/*.java
 
-# Build
-javac -d bin ../src/com/simulator/*/*.java
+# 2. Create JARs
+cd build/classes
+jar cfe ../cpu-simulator.jar com.simulator.core.CPUSimulator \
+    com/simulator/core/*.class
+jar cfe ../process-injector.jar com.simulator.injector.ProcessInjector \
+    com/simulator/injector/*.class
+```
 
-# Run
-java -cp bin com.simulator.injector.ProcessInjector --workload ../workloads/workload.txt | java -cp bin com.simulator.core.CPUSimulator
+# Running
+
+```bash
+java -jar build/process-injector.jar --workload workloads/workload.txt | \
+    java -jar build/cpu-simulator.jar --cores 4 --scheduler FCFS --ipc pipe
 ```
