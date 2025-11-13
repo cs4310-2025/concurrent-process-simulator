@@ -3,352 +3,249 @@ package com.simulator.core;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Queue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * Multi-core CPU scheduling simulator.
+ * Receives processes via IPC and schedules them across worker threads (cores).
+ */
 public class CPUSimulator {
-
-    private static long simulationStartTime;
-
-    // === Configurable Settings ===
+    private final long startTime = System.currentTimeMillis();
+    
     private final int coreCount;
     private final String schedulerType;
     private final String ipcType;
-    // Optional file paths
-    private final String shmFilePath;
     private final String outputFilePath;
-
-    // === Core Components ===
-    private final ReadyQueue readyQueue;
-    private final List<Thread> coreThreads;
-    private final Queue<Process> completedProcesses; // Thread-safe queue for stats
+    
+    private final BlockingQueue<Process> readyQueue;
+    private final List<Thread> coreThreads = new ArrayList<>();
+    private final ConcurrentLinkedQueue<Process> completedProcesses = new ConcurrentLinkedQueue<>();
     
     private volatile boolean ipcFinished = false;
-    
-    // === Statistics Metrics ===
-    // These must be accessed in a synchronized block
-    private long firstProcessStartTime = -1;
-    private long lastProcessEndTime = -1;
-    private final Object timeLock = new Object();
+    private final AtomicLong firstProcessStartTime = new AtomicLong(-1);
+    private final AtomicLong lastProcessEndTime = new AtomicLong(-1);
 
-    public CPUSimulator(int coreCount, String schedulerType, String ipcType, String shmFilePath, String outputFilePath) {
+    public CPUSimulator(int coreCount, String schedulerType, String ipcType, String outputFilePath) {
         this.coreCount = coreCount;
         this.schedulerType = schedulerType;
         this.ipcType = ipcType;
-        this.shmFilePath = shmFilePath;
         this.outputFilePath = outputFilePath;
-        
         this.readyQueue = createReadyQueue(schedulerType);
-        this.coreThreads = new ArrayList<>();
-        this.completedProcesses = new ConcurrentLinkedQueue<>();
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
         int cores = -1;
         String scheduler = null;
         String ipc = null;
-        String shmFile = "./cpu_sim_shm.dat"; // Default
         String outputFile = null;
 
-        // === Argument Parsing ===
-        try {
-            for (int i = 0; i < args.length; i++) {
-                switch (args[i]) {
-                    case "--cores":
-                        cores = Integer.parseInt(args[++i]);
-                        break;
-                    case "--scheduler":
-                        scheduler = args[++i].toUpperCase();
-                        break;
-                    case "--ipc":
-                        ipc = args[++i].toLowerCase();
-                        break;
-                    case "--shm-file":
-                        shmFile = args[++i];
-                        break;
-                    case "--output":
-                        outputFile = args[++i];
-                        break;
-                    default:
-                        System.err.println("Unknown argument: " + args[i]);
-                }
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "--cores":
+                    cores = Integer.parseInt(args[++i]);
+                    break;
+                case "--scheduler":
+                    scheduler = args[++i].toUpperCase();
+                    break;
+                case "--ipc":
+                    ipc = args[++i].toLowerCase();
+                    break;
+                case "--output":
+                    outputFile = args[++i];
+                    break;
+                default:
+                    System.err.println("Unknown argument: " + args[i]);
+                    printUsageAndExit();
             }
+        }
 
-            if (cores == -1 || scheduler == null || ipc == null) {
-                printUsageAndExit();
-            }
-            if (!scheduler.equals("FCFS") && !scheduler.equals("SJF") && !scheduler.equals("PRIORITY")) {
-                System.err.println("Invalid scheduler type. Must be FCFS, SJF, or Priority.");
-                printUsageAndExit();
-            }
-            if (!ipc.equals("pipe") && !ipc.equals("shm")) {
-                System.err.println("Invalid IPC type. Must be pipe or shm.");
-                printUsageAndExit();
-            }
-
-        } catch (Exception e) {
-            System.err.println("Error parsing arguments: " + e.getMessage());
+        if (cores == -1 || scheduler == null || ipc == null) {
+            printUsageAndExit();
+        }
+        if (!scheduler.equals("FCFS") && !scheduler.equals("SJF") && !scheduler.equals("PRIORITY")) {
+            System.err.println("Invalid scheduler: " + scheduler);
+            printUsageAndExit();
+        }
+        if (!ipc.equals("pipe")) {
+            System.err.println("Only 'pipe' IPC is currently supported");
             printUsageAndExit();
         }
 
-        // === Simulation Start ===
-        simulationStartTime = System.currentTimeMillis();
-        CPUSimulator simulator = new CPUSimulator(cores, scheduler, ipc, shmFile, outputFile);
-        
-        log("SIM", "Multi-Core Simulator Started. Cores: " + simulator.coreCount + 
-                   ". Scheduler: " + simulator.schedulerType + ". IPC: " + simulator.ipcType);
-        
-        simulator.runSimulation();
+        CPUSimulator sim = new CPUSimulator(cores, scheduler, ipc, outputFile);
+        sim.log("Simulator started: %d cores, %s scheduler, %s IPC", cores, scheduler, ipc);
+        sim.run();
     }
 
     private static void printUsageAndExit() {
-        System.err.println("Usage: java com.simulator.core.CPUSimulator --cores <N> --scheduler <TYPE> --ipc <TYPE> [--shm-file <PATH>] [--output <FILE>]");
-        System.err.println("  --scheduler <TYPE>: FCFS, SJF, Priority");
-        System.err.println("  --ipc <TYPE>:       pipe, shm");
+        System.err.println("Usage: java CPUSimulator --cores <N> --scheduler <FCFS|SJF|PRIORITY> --ipc <pipe> [--output <file>]");
         System.exit(1);
     }
-    
+
     /**
-     * Factory method to create the correct ReadyQueue implementation
+     * Creates the appropriate ready queue based on scheduling algorithm.
+     * - FCFS: LinkedBlockingQueue (FIFO)
+     * - SJF: PriorityBlockingQueue sorted by burst time
+     * - PRIORITY: PriorityBlockingQueue sorted by priority value
      */
-    private ReadyQueue createReadyQueue(String schedulerType) {
+    private BlockingQueue<Process> createReadyQueue(String schedulerType) {
         switch (schedulerType) {
             case "SJF":
-                log("SIM", "Using SJF scheduler (sorting by burst time).");
-                return new SJFQueue();
+                return new PriorityBlockingQueue<>(11, Comparator.comparingInt(p -> p.burstTime));
             case "PRIORITY":
-                log("SIM", "Using Priority scheduler (sorting by priority value).");
-                return new PriorityBasedQueue();
-            case "FCFS":
+                return new PriorityBlockingQueue<>(11, Comparator.comparingInt(p -> p.priority));
             default:
-                log("SIM", "Using FCFS scheduler (FIFO order).");
-                return new FCFSQueue();
+                return new LinkedBlockingQueue<>();
         }
     }
 
-    private void runSimulation() throws IOException {
-        startIpcThread();
-        startCoreThreads();
-        waitForCompletion();
-        
-        log("SIM", "=== ALL PROCESSES COMPLETE ===");
-        printFinalStatistics();
-        
-        // Call to write CSV file
-        if (outputFilePath != null) {
-            writeOutputCSV(outputFilePath);
-        }
-    }
-
-    private void startIpcThread() {
-        // We only support pipe for now
-        if (!ipcType.equals("pipe")) {
-            log("SIM-ERROR", "IPC type '" + ipcType + "' is not yet supported.");
-            return;
-        }
-        
-        Thread ipcThread = new Thread(new IpcPipeThread());
+    private void run() throws Exception {
+        Thread ipcThread = new Thread(this::runIpcPipeListener);
         ipcThread.setName("IPC-Thread");
         ipcThread.start();
-    }
 
-    private void startCoreThreads() {
-        for (int i = 0; i < this.coreCount; i++) {
-            Thread coreThread = new Thread(new CoreThread(i));
-            coreThread.setName("Core-" + i);
-            coreThreads.add(coreThread);
-            coreThread.start();
+        for (int i = 0; i < coreCount; i++) {
+            Thread core = new Thread(new CoreWorker(i));
+            core.setName("Core-" + i);
+            coreThreads.add(core);
+            core.start();
+        }
+
+        for (Thread core : coreThreads) {
+            core.join();
+        }
+
+        if (!readyQueue.isEmpty()) {
+            throw new IllegalStateException("Ready queue not empty after all cores finished");
+        }
+
+        log("All processes complete");
+        printStatistics();
+
+        if (outputFilePath != null) {
+            writeCSV(outputFilePath);
         }
     }
 
     /**
-     * Waits for all core threads to complete their work.
+     * IPC thread: reads process data from stdin (pipe) until "END" signal.
      */
-    private void waitForCompletion() {
-        for (Thread coreThread : coreThreads) {
-            try {
-                coreThread.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log("SIM-ERROR", "Main thread interrupted while waiting for cores.");
-            }
-        }
-    }
-
-    /**
-     * Calculates and prints all final summary statistics
-     * as specified in the README.
-     */
-    private void printFinalStatistics() {
-        if (completedProcesses.isEmpty()) {
-            log("SIM", "No processes were completed. No statistics to show.");
-            return;
-        }
-
-        int totalProcesses = completedProcesses.size();
-        long totalWaitTime = 0;
-        long totalTurnaroundTime = 0;
-
-        for (Process p : completedProcesses) {
-            totalWaitTime += p.getWaitTime();
-            totalTurnaroundTime += p.getTurnaroundTime();
-        }
-
-        double avgWaitTime = (double) totalWaitTime / totalProcesses;
-        double avgTurnaroundTime = (double) totalTurnaroundTime / totalProcesses;
-
-        // Calculate total execution time and throughput
-        long executionTimeMs = -1;
-        double throughput = 0;
-        
-        synchronized (timeLock) {
-            if (firstProcessStartTime != -1 && lastProcessEndTime != -1) {
-                executionTimeMs = lastProcessEndTime - firstProcessStartTime;
-            }
-        }
-
-        if (executionTimeMs > 0) {
-            double executionTimeSec = executionTimeMs / 1000.0;
-            throughput = totalProcesses / executionTimeSec;
-            log("SIM", String.format("Total Execution Time: %.2fs", executionTimeSec));
-            log("SIM", String.format("Throughput: %.2f processes/sec", throughput));
-        } else {
-            log("SIM", "Total Execution Time: < 1ms (or no processes run)");
-            log("SIM", "Throughput: N/A");
-        }
-
-        log("SIM", String.format("Avg. Wait Time: %.2fms", avgWaitTime));
-        log("SIM", String.format("Avg. Turnaround Time: %.2fms", avgTurnaroundTime));
-    }
-
-    /**
-     * System-wide logging utility.
-     */
-    public static void log(String tag, String message) {
-        long elapsed = System.currentTimeMillis() - simulationStartTime;
-        System.out.println("[" + elapsed + "ms] [" + tag + "] " + message);
-    }
-
-    // === CSV ===
-
-    /**
-     * Writes all completed process metrics to the specified output CSV file.
-     *
-     * @param filePath The path to the file to create.
-     */
-    private void writeOutputCSV(String filePath) throws IOException {
-        log("SIM", "Writing statistics to CSV file: " + filePath);
-        
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath))) {
-            writer.write(Process.getCSVHeader());
-            writer.newLine();
-            for (Process p : completedProcesses) {
-                writer.write(p.toCSVRow(simulationStartTime));
-                writer.newLine();
-            }
-        }
-        
-        log("SIM", "Successfully wrote " + completedProcesses.size() + " records to " + filePath);
-    }
-    
-    // === Inner Class for IPC Thread ===
-
-    private class IpcPipeThread implements Runnable {
-        @Override
-        public void run() {
-            log("IPC-PIPE", "IPC listener thread started, waiting for input...");
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.equals("END")) {
-                        log("IPC-PIPE", "Received END signal.");
-                        ipcFinished = true;
-                        break;
-                    }
-                    if (line.trim().isEmpty() || line.startsWith("#")) {
-                        continue;
-                    }
-
-                    try {
-                        Process p = Process.fromCSV(line);
-                        p.arrivalTime = System.currentTimeMillis(); // Set arrival time *now*
-                        
-                        readyQueue.put(p);
-                        log("IPC-PIPE", "New process " + p.name + " (Burst: " + p.burstTime + "ms, Prio: " + p.priority + ") arrived.");
-                    
-                    } catch (NumberFormatException e) {
-                        log("IPC-PIPE-ERROR", "Skipping malformed process line: " + line);
-                    }
+    private void runIpcPipeListener() {
+        log("IPC listener started");
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.equals("END")) {
+                    log("IPC received END signal");
+                    ipcFinished = true;
+                    break;
                 }
-            } catch (Exception e) {
-                if (!ipcFinished) {
-                    log("IPC-PIPE-ERROR", "Error in IPC thread: " + e.getMessage());
+                if (line.trim().isEmpty() || line.startsWith("#")) {
+                    continue;
                 }
+
+                Process p = Process.fromCSV(line);
+                p.arrivalTime = System.currentTimeMillis();
+                readyQueue.put(p);
+                log("Process arrived: %s", p.name);
             }
-            log("IPC-PIPE", "IPC listener thread shutting down.");
+        } catch (Exception e) {
+            if (!ipcFinished) {
+                e.printStackTrace();
+            }
         }
     }
 
-    // === Inner Class for Core Thread ===
-
-    private class CoreThread implements Runnable {
+    /**
+     * Core worker thread: pulls processes from ready queue and executes them.
+     */
+    private class CoreWorker implements Runnable {
         private final int coreId;
 
-        public CoreThread(int coreId) {
+        CoreWorker(int coreId) {
             this.coreId = coreId;
         }
 
         @Override
         public void run() {
-            String tag = "CORE-" + this.coreId;
-            log(tag, "Core thread started.");
-
             try {
                 while (!ipcFinished || !readyQueue.isEmpty()) {
+                    // Poll with timeout so we can check ipcFinished periodically
                     Process p = readyQueue.poll(100, TimeUnit.MILLISECONDS);
+                    if (p == null) continue;
 
-                    if (p == null) {
-                        // Queue was empty, loop again to re-check condition
-                        continue;
-                    }
-
-                    // === Full process logging and stats ===
                     p.startTime = System.currentTimeMillis();
+                    firstProcessStartTime.compareAndSet(-1, p.startTime);
                     
-                    // Update global simulation start time (thread-safe)
-                    synchronized (timeLock) {
-                        if (firstProcessStartTime == -1) {
-                            firstProcessStartTime = p.startTime;
-                        }
-                    }
+                    log("CORE-%d START: %s (wait: %dms)", coreId, p.name, p.waitTime());
                     
-                    long waitTime = p.getWaitTime();
-                    log(tag, "START: " + p.name + " (Wait: " + waitTime + "ms)");
-                    
-                    Thread.sleep(p.burstTime); // Simulate CPU work
+                    Thread.sleep(p.burstTime);
                     
                     p.endTime = System.currentTimeMillis();
+                    lastProcessEndTime.updateAndGet(current -> Math.max(current, p.endTime));
                     
-                    // Update global simulation end time (thread-safe)
-                    synchronized (timeLock) {
-                        lastProcessEndTime = Math.max(lastProcessEndTime, p.endTime);
-                    }
-                    
-                    long turnaroundTime = p.getTurnaroundTime();
-                    log(tag, "END: " + p.name + " (Turnaround: " + turnaroundTime + "ms)");
-                    
-                    completedProcesses.add(p); // Add to stats queue
+                    log("CORE-%d END: %s (turnaround: %dms)", coreId, p.name, p.turnaroundTime());
+                    completedProcesses.add(p);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                log(tag, "Core thread interrupted, shutting down.");
             }
-            log(tag, "Core thread finished.");
         }
+    }
+
+    private void printStatistics() {
+        if (completedProcesses.isEmpty()) {
+            log("No processes completed");
+            return;
+        }
+
+        int total = completedProcesses.size();
+        long totalWait = 0;
+        long totalTurnaround = 0;
+
+        for (Process p : completedProcesses) {
+            totalWait += p.waitTime();
+            totalTurnaround += p.turnaroundTime();
+        }
+
+        long execTime = lastProcessEndTime.get() - firstProcessStartTime.get();
+        double execTimeSec = execTime / 1000.0;
+        double throughput = total / execTimeSec;
+        double avgWait = (double) totalWait / total;
+        double avgTurnaround = (double) totalTurnaround / total;
+
+        log("===== STATISTICS =====");
+        log("Total processes: %d", total);
+        log("Execution time: %.2fs", execTimeSec);
+        log("Throughput: %.2f processes/sec", throughput);
+        log("Avg wait time: %.2fms", avgWait);
+        log("Avg turnaround time: %.2fms", avgTurnaround);
+    }
+
+    private void writeCSV(String path) throws Exception {
+        log("Writing results to: %s", path);
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(path))) {
+            writer.write(Process.csvHeader());
+            writer.newLine();
+            for (Process p : completedProcesses) {
+                writer.write(p.toCSV(startTime));
+                writer.newLine();
+            }
+        }
+        log("Wrote %d records to CSV", completedProcesses.size());
+    }
+
+    private void log(String format, Object... args) {
+        long elapsed = System.currentTimeMillis() - startTime;
+        String message = args.length == 0 ? format : String.format(format, args);
+        System.out.printf("[%dms] %s%n", elapsed, message);
     }
 }

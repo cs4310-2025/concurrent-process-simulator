@@ -1,43 +1,17 @@
 package com.simulator.core;
 
-import java.util.Comparator;
-
 /**
- * Represents a single process in the simulation.
- * Holds all data and timing metrics.
- * Implements Comparable to work with PriorityBlockingQueue.
+ * Represents a process in the simulation.
+ * Tracks timing metrics for calculating wait time and turnaround time.
  */
-public class Process implements Comparable<Process> {
-
-    /**
-     * Comparator for SJF: Sorts by burstTime (ascending).
-     */
-    public static final Comparator<Process> SJF_COMPARATOR = 
-        Comparator.comparingInt(p -> p.burstTime);
-
-    /**
-     * Comparator for Priority: Sorts by priority value (ascending).
-     */
-    public static final Comparator<Process> PRIORITY_COMPARATOR = 
-        Comparator.comparingInt(p -> p.priority);
-
-    /**
-     * Defines the sorting strategy for the static comparator.
-     */
-    public enum SortBy {
-        BURST_TIME, // For SJF
-        PRIORITY    // For Priority Scheduling
-    }
-
-    // === Fields from README ===
+public class Process {
     public final String name;
     public final int burstTime;
     public final int priority;
-
-    // === Timing Metrics ===
-    public long arrivalTime; // Set by IPC thread when process is received
-    public long startTime;   // Set by Core thread when execution begins
-    public long endTime;     // Set by Core thread when execution finishes
+    
+    public long arrivalTime;  // Set when process enters ready queue
+    public long startTime;    // Set when core begins execution
+    public long endTime;      // Set when core finishes execution
 
     public Process(String name, int burstTime, int priority) {
         this.name = name;
@@ -46,94 +20,49 @@ public class Process implements Comparable<Process> {
     }
 
     /**
-     * Factory method to parse a full CSV line.
-     * Format: Name,ArrivalTimeMs,BurstTimeMs,Priority
-     *
-     * @param csvLine The raw CSV string.
-     * @return A new Process object.
-     * @throws NumberFormatException if numeric fields are invalid.
+     * Parses a CSV line: Name,ArrivalTimeMs,BurstTimeMs,Priority
+     * Note: ArrivalTimeMs from file is ignored - actual arrival time is set by IPC thread.
      */
-    public static Process fromCSV(String csvLine) throws NumberFormatException {
-        try {
-            String[] parts = csvLine.split(",");
-            if (parts.length < 4) {
-                throw new IllegalArgumentException("CSV line must have 4 fields.");
-            }
-            String name = parts[0].trim();
-            // parts[1] (ArrivalTimeMs) is used by Injector, not Simulator
-            int burstTime = Integer.parseInt(parts[2].trim());
-            int priority = Integer.parseInt(parts[3].trim());
-            
-            return new Process(name, burstTime, priority);
-        } catch (Exception e) {
-            // Re-throw as a more specific exception
-            throw new NumberFormatException("Failed to parse CSV line: " + csvLine + " - " + e.getMessage());
+    public static Process fromCSV(String line) {
+        String[] parts = line.split(",");
+        if (parts.length < 4) {
+            throw new IllegalArgumentException("Invalid CSV format: " + line);
         }
+        return new Process(
+            parts[0].trim(),
+            Integer.parseInt(parts[2].trim()),
+            Integer.parseInt(parts[3].trim())
+        );
     }
 
-    // === Calculated Metrics ===
-    
-    /**
-     * @return The total time the process spent waiting in the ready queue.
-     */
-    public long getWaitTime() {
-        // Ensure startTime has been set
-        if (startTime == 0 || arrivalTime == 0) return 0;
+    public long waitTime() {
         return startTime - arrivalTime;
     }
 
-    /**
-     * @return The total time from process arrival to its completion.
-     */
-    public long getTurnaroundTime() {
-        // Ensure endTime has been set
-        if (endTime == 0 || arrivalTime == 0) return 0;
+    public long turnaroundTime() {
         return endTime - arrivalTime;
     }
 
     /**
-     * Default comparison for Comparable.
-     * We'll make it default to SJF, though it shouldn't be relied upon.
+     * Exports process metrics as CSV row with timestamps relative to simulation start.
      */
-    @Override
-    public int compareTo(Process other) {
-        return SJF_COMPARATOR.compare(this, other);
+    public String toCSV(long simulationStartTime) {
+        return String.format("%s,%d,%d,%d,%d,%d",
+            name,
+            arrivalTime - simulationStartTime,
+            startTime - simulationStartTime,
+            endTime - simulationStartTime,
+            waitTime(),
+            turnaroundTime()
+        );
+    }
+
+    public static String csvHeader() {
+        return "Name,ArrivalTime,StartTime,EndTime,WaitTime,TurnaroundTime";
     }
 
     @Override
     public String toString() {
-        return name + " (Burst: " + burstTime + "ms, Prio: " + priority + ")";
-    }
-
-    // === CSV Export ===
-
-    /**
-     * @return A header row for the CSV output file.
-     */
-    public static String getCSVHeader() {
-        return "Name,ArrivalTime,StartTime,EndTime,WaitTime,TurnaroundTime";
-    }
-
-    /**
-     * Returns the process metrics as a single CSV row.
-     * All times are relative to simulationStartTime.
-     *
-     * @param simulationStartTime The System.currentTimeMillis() when the sim started.
-     * @return A string formatted as a CSV row.
-     */
-    public String toCSVRow(long simulationStartTime) {
-        // Calculate times relative to the simulation start (for easier graphing)
-        long relArrival = arrivalTime - simulationStartTime;
-        long relStart = startTime - simulationStartTime;
-        long relEnd = endTime - simulationStartTime;
-
-        return String.format("%s,%d,%d,%d,%d,%d",
-            name,
-            relArrival,
-            relStart,
-            relEnd,
-            getWaitTime(),
-            getTurnaroundTime()
-        );
+        return String.format("%s (Burst: %dms, Priority: %d)", name, burstTime, priority);
     }
 }
