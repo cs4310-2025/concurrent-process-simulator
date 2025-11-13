@@ -1,6 +1,9 @@
 package com.simulator.core;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,14 +48,14 @@ public class CPUSimulator {
         this.completedProcesses = new ConcurrentLinkedQueue<>();
     }
 
-    public static void main(String[] args) {
-        // === Argument Parsing ===
+    public static void main(String[] args) throws IOException {
         int cores = -1;
         String scheduler = null;
         String ipc = null;
         String shmFile = "./cpu_sim_shm.dat"; // Default
         String outputFile = null;
 
+        // === Argument Parsing ===
         try {
             for (int i = 0; i < args.length; i++) {
                 switch (args[i]) {
@@ -128,7 +131,7 @@ public class CPUSimulator {
         }
     }
 
-    private void runSimulation() {
+    private void runSimulation() throws IOException {
         startIpcThread();
         startCoreThreads();
         waitForCompletion();
@@ -136,9 +139,9 @@ public class CPUSimulator {
         log("SIM", "=== ALL PROCESSES COMPLETE ===");
         printFinalStatistics();
         
+        // Call to write CSV file
         if (outputFilePath != null) {
-            // We will implement this in a future milestone
-            log("SIM", "CSV output file specified (implementation pending): " + outputFilePath);
+            writeOutputCSV(outputFilePath);
         }
     }
 
@@ -229,6 +232,28 @@ public class CPUSimulator {
     public static void log(String tag, String message) {
         long elapsed = System.currentTimeMillis() - simulationStartTime;
         System.out.println("[" + elapsed + "ms] [" + tag + "] " + message);
+    }
+
+    // === CSV ===
+
+    /**
+     * Writes all completed process metrics to the specified output CSV file.
+     *
+     * @param filePath The path to the file to create.
+     */
+    private void writeOutputCSV(String filePath) throws IOException {
+        log("SIM", "Writing statistics to CSV file: " + filePath);
+        
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath))) {
+            writer.write(Process.getCSVHeader());
+            writer.newLine();
+            for (Process p : completedProcesses) {
+                writer.write(p.toCSVRow(simulationStartTime));
+                writer.newLine();
+            }
+        }
+        
+        log("SIM", "Successfully wrote " + completedProcesses.size() + " records to " + filePath);
     }
     
     // === Inner Class for IPC Thread ===

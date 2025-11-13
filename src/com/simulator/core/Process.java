@@ -104,4 +104,36 @@ public class Process implements Comparable<Process> {
     public String toString() {
         return name + " (Burst: " + burstTime + "ms, Prio: " + priority + ")";
     }
+
+    // === CSV Export ===
+
+    /**
+     * @return A header row for the CSV output file.
+     */
+    public static String getCSVHeader() {
+        return "Name,ArrivalTime,StartTime,EndTime,WaitTime,TurnaroundTime";
+    }
+
+    /**
+     * Returns the process metrics as a single CSV row.
+     * All times are relative to simulationStartTime.
+     *
+     * @param simulationStartTime The System.currentTimeMillis() when the sim started.
+     * @return A string formatted as a CSV row.
+     */
+    public String toCSVRow(long simulationStartTime) {
+        // Calculate times relative to the simulation start (for easier graphing)
+        long relArrival = arrivalTime - simulationStartTime;
+        long relStart = startTime - simulationStartTime;
+        long relEnd = endTime - simulationStartTime;
+
+        return String.format("%s,%d,%d,%d,%d,%d",
+            name,
+            relArrival,
+            relStart,
+            relEnd,
+            getWaitTime(),
+            getTurnaroundTime()
+        );
+    }
 }
