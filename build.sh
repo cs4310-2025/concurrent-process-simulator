@@ -14,12 +14,10 @@ javac -d build/classes \
 
 # 3. Create JARs
 echo "Creating JARs..."
-cd build/classes || { echo "Couldn't cd into build/classes"; exit; }
-jar cfe ../cpu-simulator.jar com.simulator.core.CPUSimulator \
-    com/simulator/core/*.class
-jar cfe ../process-injector.jar com.simulator.injector.ProcessInjector \
-    com/simulator/injector/*.class
-cd ../..
+jar cfe build/cpu-simulator.jar com.simulator.core.CPUSimulator \
+    -C build/classes com/simulator/core
+jar cfe build/process-injector.jar com.simulator.injector.ProcessInjector \
+    -C build/classes com/simulator/injector
 
 echo "=== Build Complete ==="
 echo "Artifacts created:"

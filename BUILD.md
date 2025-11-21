@@ -1,5 +1,3 @@
-TODO Cross-platform instructions
-
 # Building
 
 ```bash
@@ -9,11 +7,10 @@ javac -d build/classes \
     src/com/simulator/injector/*.java
 
 # 2. Create JARs
-cd build/classes
-jar cfe ../cpu-simulator.jar com.simulator.core.CPUSimulator \
-    com/simulator/core/*.class
-jar cfe ../process-injector.jar com.simulator.injector.ProcessInjector \
-    com/simulator/injector/*.class
+jar cfe build/cpu-simulator.jar com.simulator.core.CPUSimulator \
+    -C build/classes com/simulator/core
+jar cfe build/process-injector.jar com.simulator.injector.ProcessInjector \
+    -C build/classes com/simulator/injector
 ```
 
 # Running

@@ -12,12 +12,24 @@ The simulator consists of two separate Java programs that communicate via IPC:
 # Building
 
 ```bash
-bash ./build.sh
+# 1. Compile all Java files
+javac -d build/classes \
+    src/com/simulator/core/*.java \
+    src/com/simulator/injector/*.java
+
+# 2. Create JARs
+jar cfe build/cpu-simulator.jar com.simulator.core.CPUSimulator \
+    -C build/classes com/simulator/core
+jar cfe build/process-injector.jar com.simulator.injector.ProcessInjector \
+    -C build/classes com/simulator/injector
 ```
 
 This creates two JAR files:
 - `build/cpu-simulator.jar`
 - `build/process-injector.jar`
+
+> [!TIP]
+> A convenient build script that runs the above commands is available at `build.sh`, for UNIX systems.
 
 # Running
 
